@@ -1,0 +1,371 @@
+"""
+GriffinGNN — Explicabilité (section 7 de l'article)
+UMAP des embeddings, distribution des scores, boxplots, SHAP.
+À exécuter dans le même runtime que train_griffin_gnn.py
+(model, data, feature_cols, X_tx_raw, X_tx_scaled, test_idx doivent être en mémoire).
+"""
+
+import os
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import shap
+import umap
+import torch
+import torch.nn.functional as F
+from sklearn.metrics import precision_recall_curve, auc
+
+
+# ============================================================
+# Config
+# ============================================================
+
+SAVE_DIR = "/content/drive/MyDrive/griffin_figures"
+PREDS_PATH = "/content/drive/MyDrive/gnn_v3_full_evaluation.pt"
+
+COLOR_LEGIT = "#3498db"
+COLOR_FRAUD = "#e74c3c"
+
+CATEGORY_COLORS = {
+    "Monetary": "#e74c3c",
+    "Structural": "#3498db",
+    "Network/Behavioral": "#2ecc71",
+    "Temporal": "#f39c12",
+    "Other": "#95a5a6",
+}
+
+TEMPORAL_FEATS = ["year", "month", "day_of_week", "hour", "is_weekend", "time_since_last_tx"]
+MONETARY_FEATS = [
+    "total_input", "total_output", "fees", "fees_scaled", "fee_ratio",
+    "output_input_ratio", "avg_input_value", "avg_output_value",
+    "high_fee_flag", "total_input_scaled", "total_output_scaled",
+    "input_value", "output_value",
+]
+STRUCTURAL_FEATS = [
+    "input_count", "output_count", "total_io_count", "input_addr_count",
+    "output_addr_count", "address_reuse_count", "is_self_transfer",
+]
+NETWORK_FEATS = ["ratio_new_known_addr", "graph_metric", "addr_entropy", "burst_activity", "dust_output_count"]
+
+BOXPLOT_FEATURES = [
+    "input_count", "output_count", "addr_entropy",
+    "address_reuse_count", "burst_activity", "graph_metric",
+]
+
+
+def set_style():
+    plt.rcParams.update({
+        "font.family": "serif",
+        "font.size": 11,
+        "axes.titlesize": 12,
+        "axes.labelsize": 11,
+        "legend.fontsize": 10,
+        "figure.dpi": 150,
+    })
+
+
+def save_fig(path):
+    plt.savefig(path, format="pdf", bbox_inches="tight")
+    plt.show()
+    print(f"Sauvegardé : {path}")
+
+
+# ============================================================
+# Chargement des prédictions
+# ============================================================
+
+def load_predictions(path=PREDS_PATH):
+    preds = torch.load(path, weights_only=False)
+    probs, true, best_th = preds["probs"], preds["y_true"], preds["threshold"]
+    print(f"Chargé : {len(probs)} transactions de test")
+    print(f"Seuil optimal : θ* = {best_th:.3f}")
+    print(f"Fraudes : {true.sum()} / {len(true)}")
+    return probs, true, best_th
+
+
+# ============================================================
+# Embeddings GNN (avant classifieur)
+# ============================================================
+
+@torch.no_grad()
+def get_embeddings(model, data):
+    model.eval()
+    h_tx = model.tx_proj(data.x_dict["transaction"])
+    h_addr = model.addr_proj(data.x_dict["address"])
+    for i, conv in enumerate(model.convs):
+        x_new = conv({"transaction": h_tx, "address": h_addr}, data.edge_index_dict)
+        h_tx = F.dropout(
+            F.relu(model.norms_tx[i](x_new.get("transaction", h_tx) + h_tx)), p=0.0, training=False
+        )
+        h_addr = F.dropout(
+            F.relu(model.norms_addr[i](x_new.get("address", h_addr) + h_addr)), p=0.0, training=False
+        )
+    return h_tx.cpu().numpy()
+
+
+# ============================================================
+# Figures
+# ============================================================
+
+def plot_umap(embeddings_test, test_true, save_dir=SAVE_DIR, n_sample=15000):
+    print("\nCalcul UMAP...")
+    reducer = umap.UMAP(n_neighbors=30, min_dist=0.1, n_components=2, random_state=42, verbose=False)
+
+    n_sample = min(n_sample, len(embeddings_test))
+    idx_sample = np.random.choice(len(embeddings_test), n_sample, replace=False)
+    emb_sample = embeddings_test[idx_sample]
+    true_sample = test_true[idx_sample]
+
+    emb_2d = reducer.fit_transform(emb_sample)
+    print("UMAP terminé.")
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    mask_leg = true_sample == 0
+    mask_fr = true_sample == 1
+    ax.scatter(emb_2d[mask_leg, 0], emb_2d[mask_leg, 1], c=COLOR_LEGIT, s=4, alpha=0.25, linewidths=0, label="Legitimate")
+    ax.scatter(emb_2d[mask_fr, 0], emb_2d[mask_fr, 1], c=COLOR_FRAUD, s=18, alpha=0.85, linewidths=0, label="Fraud")
+
+    ax.set_xlabel("UMAP Dimension 1")
+    ax.set_ylabel("UMAP Dimension 2")
+    ax.set_title("UMAP Projection of GNN Transaction Embeddings (Test Set)")
+    ax.legend(loc="upper right", framealpha=0.9)
+    ax.grid(True, alpha=0.3, linewidth=0.5)
+    plt.tight_layout()
+    save_fig(f"{save_dir}/griffin_umap_embeddings.pdf")
+
+
+def plot_score_distribution(test_probs, test_true, best_th, save_dir=SAVE_DIR):
+    fig, ax = plt.subplots(figsize=(8, 4))
+    bins = np.linspace(0, 1, 60)
+    ax.hist(test_probs[test_true == 0], bins=bins, alpha=0.65, color=COLOR_LEGIT, label="Legitimate", density=True)
+    ax.hist(test_probs[test_true == 1], bins=bins, alpha=0.75, color=COLOR_FRAUD, label="Fraud", density=True)
+    ax.axvline(best_th, color="black", linestyle="--", linewidth=1.5, label=f"θ* = {best_th:.3f}")
+
+    ax.set_xlabel("Fraud Probability Score $\\hat{p}_t$")
+    ax.set_ylabel("Density")
+    ax.set_title("Distribution of Fraud Probability Scores (Test Set)")
+    ax.legend(framealpha=0.9)
+    ax.grid(True, alpha=0.3, linewidth=0.5)
+    plt.tight_layout()
+    save_fig(f"{save_dir}/griffin_score_distribution.pdf")
+
+
+def plot_feature_boxplots(X_test_raw, y_test_np, feature_cols, save_dir=SAVE_DIR, features=BOXPLOT_FEATURES):
+    feature_indices = [feature_cols.index(f) for f in features if f in feature_cols]
+    features_available = [feature_cols[i] for i in feature_indices]
+
+    fig, axes = plt.subplots(2, 3, figsize=(12, 7))
+    axes = axes.flatten()
+
+    for k, (feat_name, feat_idx) in enumerate(zip(features_available, feature_indices)):
+        ax = axes[k]
+        vals_leg = np.log1p(X_test_raw[y_test_np == 0, feat_idx])
+        vals_fr = np.log1p(X_test_raw[y_test_np == 1, feat_idx])
+
+        bp = ax.boxplot(
+            [vals_leg, vals_fr], labels=["Legitimate", "Fraud"], patch_artist=True,
+            medianprops=dict(color="black", linewidth=1.5),
+            flierprops=dict(marker="o", markersize=2, alpha=0.3), widths=0.5,
+        )
+        bp["boxes"][0].set_facecolor(COLOR_LEGIT)
+        bp["boxes"][0].set_alpha(0.7)
+        bp["boxes"][1].set_facecolor(COLOR_FRAUD)
+        bp["boxes"][1].set_alpha(0.7)
+        ax.set_title(f"log(1 + {feat_name})", fontsize=10)
+        ax.grid(True, alpha=0.3, linewidth=0.5, axis="y")
+
+    plt.suptitle("Distribution of Key Features: Legitimate vs Fraudulent Transactions", fontsize=12, y=1.01)
+    plt.tight_layout()
+    save_fig(f"{save_dir}/griffin_feature_boxplots.pdf")
+
+
+def plot_pr_curve(test_probs, test_true, best_th, save_dir=SAVE_DIR):
+    precision_curve, recall_curve, thresholds_pr = precision_recall_curve(test_true, test_probs)
+    pr_auc = auc(recall_curve, precision_curve)
+
+    idx_th = np.argmin(np.abs(thresholds_pr - best_th))
+    p_star, r_star = precision_curve[idx_th], recall_curve[idx_th]
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.plot(recall_curve, precision_curve, color="#2c3e50", linewidth=2, label=f"GRIFFIN (PR-AUC = {pr_auc:.4f})")
+    ax.scatter([r_star], [p_star], color=COLOR_FRAUD, zorder=5, s=100,
+               label=f"θ* = {best_th:.3f} (P={p_star:.3f}, R={r_star:.3f})")
+
+    ax.set_xlabel("Recall")
+    ax.set_ylabel("Precision")
+    ax.set_title("Precision-Recall Curve — GRIFFIN (Temporal Split)")
+    ax.legend(framealpha=0.9)
+    ax.grid(True, alpha=0.3, linewidth=0.5)
+    ax.set_xlim([0, 1])
+    ax.set_ylim([0, 1.02])
+    plt.tight_layout()
+    save_fig(f"{save_dir}/griffin_pr_curve.pdf")
+    return pr_auc
+
+
+# ============================================================
+# SHAP
+# ============================================================
+
+class GNNWrapper:
+    """Remplace les features TX des noeuds de test et retourne les probabilités de fraude."""
+
+    def __init__(self, model, data, test_mask, device):
+        self.model = model
+        self.data = data
+        self.test_mask = test_mask
+        self.device = device
+
+    def predict(self, X_input):
+        X_tensor = torch.tensor(X_input, dtype=torch.float32).to(self.device)
+        data_copy = self.data.clone()
+        test_indices = self.test_mask.nonzero(as_tuple=True)[0]
+        n = min(len(X_input), len(test_indices))
+        data_copy["transaction"].x[test_indices[:n]] = X_tensor[:n]
+        with torch.no_grad():
+            self.model.eval()
+            out = self.model(data_copy)
+            probs = F.softmax(out[self.test_mask], dim=-1)[:, 1].cpu().numpy()
+        return probs[:n]
+
+
+def compute_shap_values(model, data, X_test_scaled, device, n_shap=500, n_background=100):
+    print("\nCalcul SHAP (sur features tabulaires brutes)...")
+    n_shap = min(n_shap, len(X_test_scaled))
+    idx_shap = np.random.choice(len(X_test_scaled), n_shap, replace=False)
+    X_shap_sample = X_test_scaled[idx_shap]
+
+    wrapper = GNNWrapper(model, data, data["transaction"].test_mask, device)
+    background = X_test_scaled[np.random.choice(len(X_test_scaled), n_background, replace=False)]
+    explainer = shap.KernelExplainer(wrapper.predict, background)
+    shap_values = explainer.shap_values(X_shap_sample, nsamples=100)
+
+    print("SHAP terminé.")
+    return shap_values, X_shap_sample
+
+
+def plot_shap_bar(shap_values, X_shap_sample, feature_cols, save_dir=SAVE_DIR):
+    fig, ax = plt.subplots(figsize=(9, 6))
+    shap.summary_plot(
+        shap_values, X_shap_sample, feature_names=feature_cols,
+        plot_type="bar", max_display=15, show=False, color=COLOR_FRAUD,
+    )
+    plt.title("SHAP Feature Importance — GriffinGNN (Test Set)")
+    plt.tight_layout()
+    save_fig(f"{save_dir}/griffin_shap_bar.pdf")
+
+
+def plot_shap_beeswarm(shap_values, X_shap_sample, feature_cols, save_dir=SAVE_DIR):
+    fig, ax = plt.subplots(figsize=(9, 7))
+    shap.summary_plot(
+        shap_values, X_shap_sample, feature_names=feature_cols,
+        plot_type="dot", max_display=15, show=False,
+    )
+    plt.title("SHAP Beeswarm Plot — GriffinGNN (Test Set)")
+    plt.tight_layout()
+    save_fig(f"{save_dir}/griffin_shap_beeswarm.pdf")
+
+
+def get_category(feat):
+    if feat in TEMPORAL_FEATS:
+        return "Temporal"
+    if feat in MONETARY_FEATS:
+        return "Monetary"
+    if feat in STRUCTURAL_FEATS:
+        return "Structural"
+    if feat in NETWORK_FEATS:
+        return "Network/Behavioral"
+    return "Other"
+
+
+def shap_by_category(shap_values, feature_cols, save_dir=SAVE_DIR):
+    mean_shap = np.abs(shap_values).mean(axis=0)
+    shap_df = pd.DataFrame({"feature": feature_cols, "mean_shap": mean_shap}).sort_values(
+        "mean_shap", ascending=False
+    )
+    shap_df["category"] = shap_df["feature"].apply(get_category)
+
+    print("\n=== TOP 15 FEATURES PAR IMPORTANCE SHAP ===")
+    print(shap_df.head(15).to_string(index=False))
+
+    cat_importance = shap_df.groupby("category")["mean_shap"].sum().sort_values(ascending=False)
+    print("\n=== IMPORTANCE SHAP PAR CATÉGORIE ===")
+    print(cat_importance.to_string())
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.barh(cat_importance.index, cat_importance.values,
+            color=[CATEGORY_COLORS.get(c, "#95a5a6") for c in cat_importance.index])
+    ax.set_xlabel("Mean |SHAP value|")
+    ax.set_title("SHAP Feature Importance by Category")
+    ax.grid(True, alpha=0.3, linewidth=0.5, axis="x")
+    plt.tight_layout()
+    save_fig(f"{save_dir}/griffin_shap_by_category.pdf")
+
+    return shap_df
+
+
+# ============================================================
+# Main
+# ============================================================
+
+def main(model, data, feature_cols, X_tx_raw, X_tx_scaled, test_idx, y_tx):
+    """
+    À appeler depuis le même runtime que train_griffin_gnn.py, avec :
+    model, data, feature_cols, X_tx_raw, X_tx_scaled, test_idx, y_tx déjà en mémoire.
+    """
+    set_style()
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    device = next(model.parameters()).device
+
+    test_probs, test_true, best_th = load_predictions()
+
+    embeddings_all = get_embeddings(model, data)
+    test_mask_np = data["transaction"].test_mask.cpu().numpy()
+    embeddings_test = embeddings_all[test_mask_np]
+    print(f"Embeddings test : {embeddings_test.shape}")
+
+    plot_umap(embeddings_test, test_true)
+    plot_score_distribution(test_probs, test_true, best_th)
+
+    X_test_raw = X_tx_raw[test_idx]
+    y_test_np = y_tx[test_idx]
+    plot_feature_boxplots(X_test_raw, y_test_np, feature_cols)
+
+    X_test_scaled = X_tx_scaled[test_idx]
+    shap_values, X_shap_sample = compute_shap_values(model, data, X_test_scaled, device)
+    plot_shap_bar(shap_values, X_shap_sample, feature_cols)
+    plot_shap_beeswarm(shap_values, X_shap_sample, feature_cols)
+
+    plot_pr_curve(test_probs, test_true, best_th)
+
+    shap_df = shap_by_category(shap_values, feature_cols)
+
+    print("\n" + "=" * 60)
+    print("FIGURES GÉNÉRÉES POUR L'ARTICLE")
+    print("=" * 60)
+    figures = [
+        "griffin_umap_embeddings.pdf",
+        "griffin_score_distribution.pdf",
+        "griffin_feature_boxplots.pdf",
+        "griffin_shap_bar.pdf",
+        "griffin_shap_beeswarm.pdf",
+        "griffin_pr_curve.pdf",
+        "griffin_shap_by_category.pdf",
+    ]
+    for f in figures:
+        path = f"{SAVE_DIR}/{f}"
+        status = "OK" if os.path.exists(path) else "MANQUANT"
+        print(f"  [{status}] {f}")
+
+    print("\nTop 5 features SHAP :")
+    for _, row in shap_df.head(5).iterrows():
+        print(f"  {row['feature']:30s} | SHAP = {row['mean_shap']:.5f} | {row['category']}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(
+        "Ce script attend model, data, feature_cols, X_tx_raw, X_tx_scaled, "
+        "test_idx et y_tx en mémoire (même runtime que train_griffin_gnn.py). "
+        "Importez-le et appelez main(...) directement."
+    )
