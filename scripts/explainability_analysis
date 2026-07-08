@@ -21,8 +21,8 @@ from sklearn.metrics import precision_recall_curve, auc
 # Config
 # ============================================================
 
-SAVE_DIR = "/content/drive/MyDrive/griffin_figures"
-PREDS_PATH = "/content/drive/MyDrive/gnn_v3_full_evaluation.pt"
+SAVE_DIR = "/griffin_figures"
+PREDS_PATH = "/gnn_v3_full_evaluation.pt"
 
 COLOR_LEGIT = "#3498db"
 COLOR_FRAUD = "#e74c3c"
