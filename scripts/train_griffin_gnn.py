@@ -30,9 +30,9 @@ from torch_geometric.nn import HeteroConv, SAGEConv
 # ============================================================
 
 SEED = 42
-DB_PATH = "/content/drive/MyDrive/bitcoin_fraud.db"
-CSV_PATH = "/content/drive/MyDrive/bitcoin_processed_43features.csv"
-OUT_PATH = "/content/drive/MyDrive/gnn_v2_preds.pt"
+DB_PATH = "/bitcoin_fraud.db"
+CSV_PATH = "/bitcoin_processed_43features.csv"
+OUT_PATH = "/gnn_v2_preds.pt"
 
 TRAIN_FRAC = 0.64
 VAL_FRAC = 0.80  # cumulatif -> val = [0.64, 0.80]
