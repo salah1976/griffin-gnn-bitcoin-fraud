@@ -1,0 +1,165 @@
+# GriffinGNN — Détection de fraude Bitcoin par réseau de neurones sur graphe hétérogène
+
+Ce dépôt contient le pipeline utilisé dans l'article *GriffinGNN* : entraînement d'un modèle
+GNN hétérogène (transactions / adresses) sur un jeu de données Bitcoin, et analyse
+d'explicabilité (SHAP, UMAP) des résultats.
+
+## Structure du dépôt
+
+```
+.
+├── train_griffin_gnn.py         # Entraînement + évaluation du modèle
+├── explainability_analysis.py   # Figures d'explicabilité (SHAP, UMAP, PR curve...)
+├── requirements.txt
+└── README.md
+```
+
+## Prérequis
+
+- Python 3.10+
+- Un GPU CUDA est recommandé (le code fonctionne aussi sur CPU, mais plus lentement).
+- Deux fichiers de données non fournis dans ce dépôt (voir plus bas) :
+  - une base SQLite contenant les tables `transactions`, `transaction_inputs`,
+    `transaction_outputs`, `addresses` ;
+  - un CSV de features par transaction, avec au minimum les colonnes `tx_hash` et
+    `label_any`.
+
+### Installation
+
+```bash
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+`requirements.txt` :
+
+```
+torch
+torch-geometric
+numpy
+pandas
+scikit-learn
+shap
+umap-learn
+matplotlib
+seaborn
+```
+
+> `torch-geometric` peut nécessiter une installation spécifique à votre version de
+> torch/CUDA — voir la [documentation officielle](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html).
+
+## 1. Entraînement — `train_griffin_gnn.py`
+
+### Configuration
+
+Toutes les options sont regroupées en haut du fichier, dans le bloc `Config` :
+
+| Variable | Rôle | Défaut |
+|---|---|---|
+| `DB_PATH` | chemin vers la base SQLite | `.../bitcoin_fraud.db` |
+| `CSV_PATH` | chemin vers le CSV de features | `.../bitcoin_processed_43features.csv` |
+| `OUT_PATH` | chemin de sauvegarde des prédictions (`.pt`) | `.../gnn_v2_preds.pt` |
+| `TRAIN_FRAC` / `VAL_FRAC` | bornes du split chronologique (train / val / test) | `0.64` / `0.80` |
+| `HIDDEN_DIM`, `N_LAYERS`, `DROPOUT` | architecture du modèle | `128`, `3`, `0.10` |
+| `LR`, `WEIGHT_DECAY` | optimiseur Adam | `1e-3`, `1e-4` |
+| `FOCAL_GAMMA` | paramètre de la focal loss pondérée | `2.0` |
+| `NUM_EPOCHS`, `PATIENCE` | entraînement / early stopping | `150`, `20` |
+
+Avant de lancer, modifiez `DB_PATH`, `CSV_PATH` et `OUT_PATH` pour pointer vers vos
+propres fichiers (localement ou sur un Drive monté).
+
+### Exécution
+
+```bash
+python train_griffin_gnn.py
+```
+
+Le script :
+1. charge et fusionne les tables SQLite avec les features CSV ;
+2. effectue un split **chronologique** train/val/test (pas de fuite temporelle) ;
+3. construit le graphe hétérogène `transaction` ↔ `address` ;
+4. entraîne `GriffinGNNv2` (SAGEConv + skip connections) avec une focal loss
+   pondérée par classe ;
+5. sélectionne le meilleur seuil de décision sur la validation (F1-fraude) ;
+6. affiche un rapport de classification détaillé sur le test, ainsi qu'un
+   diagnostic **exposed vs clean** (transactions test connectées ou non à des
+   adresses frauduleuses vues en entraînement, pour détecter une éventuelle fuite
+   structurelle) ;
+7. sauvegarde `probs`, `y_true` et le seuil optimal dans `OUT_PATH`.
+
+### Utiliser vos propres données
+
+Le CSV de features doit contenir au minimum :
+- `tx_hash` (clé de jointure avec la table `transactions`) ;
+- `label_any` (0 = légitime, 1 = fraude) ;
+- éventuellement `label_verified` pour une évaluation restreinte aux labels
+  vérifiés.
+
+Toute colonne numérique additionnelle est automatiquement utilisée comme feature
+(sauf celles listées dans `EXCLUDE_NUMERIC`).
+
+## 2. Explicabilité — `explainability_analysis.py`
+
+Ce script **n'est pas autonome** : il réutilise les objets Python déjà construits
+par `train_griffin_gnn.py` (`model`, `data`, `feature_cols`, `X_tx_raw`,
+`X_tx_scaled`, `test_idx`, `y_tx`). Deux façons de l'utiliser :
+
+### a) Dans le même processus/notebook
+
+```python
+import train_griffin_gnn as tg
+import explainability_analysis as ex
+
+# Reproduire les étapes de tg.main() jusqu'à l'entraînement du modèle,
+# ou factoriser train_griffin_gnn.main() pour retourner les objets nécessaires.
+
+ex.main(
+    model=model,
+    data=data,
+    feature_cols=feature_cols,
+    X_tx_raw=X_tx_raw,
+    X_tx_scaled=X_tx,
+    test_idx=test_idx,
+    y_tx=y_tx,
+)
+```
+
+### b) Recharger un modèle déjà entraîné
+
+Si vous avez sauvegardé les poids du modèle séparément (`torch.save(model.state_dict(), ...)`),
+rechargez-les puis reconstruisez `data` de la même façon que dans
+`train_griffin_gnn.main()` avant d'appeler `ex.main(...)`.
+
+### Ce que produit le script
+
+Toutes les figures sont enregistrées en PDF dans `SAVE_DIR`
+(`/content/drive/MyDrive/griffin_figures` par défaut, à adapter) :
+
+| Fichier | Contenu |
+|---|---|
+| `griffin_umap_embeddings.pdf` | Projection UMAP des embeddings GNN (test) |
+| `griffin_score_distribution.pdf` | Distribution des scores de fraude, avec seuil θ* |
+| `griffin_feature_boxplots.pdf` | Boxplots des features structurelles clés |
+| `griffin_shap_bar.pdf` | Importance SHAP (bar plot) |
+| `griffin_shap_beeswarm.pdf` | Importance SHAP (beeswarm) |
+| `griffin_pr_curve.pdf` | Courbe Precision-Recall avec point θ* |
+| `griffin_shap_by_category.pdf` | Importance SHAP agrégée par catégorie (temporel, monétaire, structurel, réseau) |
+
+Le calcul SHAP utilise `KernelExplainer` sur un sous-échantillon (500 points par
+défaut, `n_shap` dans `compute_shap_values`) — ajustez `n_shap`/`n_background`
+selon votre budget de calcul.
+
+## Notes
+
+- Le seuil de décision θ* est choisi sur la validation, jamais sur le test.
+- Le scaling des features (transactions et adresses) est **fit uniquement sur le
+  train**, pour éviter toute fuite d'information temporelle ou structurelle.
+- Les chemins par défaut (`/content/drive/MyDrive/...`) supposent une exécution
+  sur Google Colab avec Drive monté ; remplacez-les par des chemins locaux pour
+  une exécution hors Colab.
+
+## Citation
+
+Si vous utilisez ce code, merci de citer l'article associé (référence à
+compléter une fois la publication acceptée).
