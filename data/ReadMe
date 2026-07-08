@@ -1,1 +1,117 @@
+# Dataset Description
+
+This directory provides information about the dataset used in the proposed Bitcoin fraud detection framework.
+Due to GitHub storage limitations, the complete dataset files are not directly hosted in this repository. The full data package is publicly archived on Zenodo:
+
+Dataset repository: https://zenodo.org/uploads/17428642
+
+The released package contains two complementary data representations:
+
+---
+
+## 1. `bitcoin_fraud.db` — Relational Database
+
+`bitcoin_fraud.db` is a complete SQLite relational database containing the extracted and processed Bitcoin transaction data.
+
+The database integrates more than **392,640 Bitcoin transactions** with their corresponding blockchain blocks and wallet addresses through eight interrelated tables. It also includes more than **101,726 scam-reported Bitcoin addresses** collected from Chainabuse reports and associated fraud categories.
+
+The relational schema is designed to preserve data consistency and enable structured exploration of both:
+
+* **On-chain information** extracted from Bitcoin transaction records.
+* **Address-level information** associated with reported fraudulent activities.
+* **Temporal and structural relationships** between transactions, blocks, and wallet entities.
+
+The database can be directly explored using any SQLite-compatible software or accessed programmatically through Python libraries such as `sqlite3`, `pandas`, or SQL-based analytical pipelines.
+
+Example:
+
+```python
+import sqlite3
+import pandas as pd
+
+connection = sqlite3.connect("bitcoin_fraud.db")
+
+transactions = pd.read_sql_query(
+    "SELECT * FROM transactions LIMIT 10;",
+    connection
+)
+
+print(transactions)
+```
+
+---
+
+## 2. `bitcoin_processed_43features.csv` — Processed Dataset
+
+`bitcoin_processed_43features.csv` is a machine-learning-ready version generated from the relational database using SQL extraction and Python preprocessing scripts.
+
+It contains the same **392,640 Bitcoin transactions**, represented by **43 engineered features** designed to capture different dimensions of transaction behavior:
+
+* **10 native blockchain features** directly extracted from Bitcoin transaction records.
+* **33 derived features** describing structural, temporal, and monetary characteristics.
+
+The engineered features include transaction-level properties such as:
+
+* Transaction size and value characteristics.
+* Input/output structural information.
+* Address activity patterns.
+* Temporal behavioral indicators.
+* Risk-related address descriptors.
+
+Each transaction is associated with multiple fraud annotations to support different experimental settings:
+
+| Label                | Description                                                 |
+| -------------------- | ----------------------------------------------------------- |
+| `label_verified`     | Confirmed fraud labels based on verified scam reports.      |
+| `label_not_verified` | Non-verified fraud-related annotations.                     |
+| `heuristic_score`    | Behavioral fraud score derived from heuristic indicators.   |
+| `label_any`          | Combined fraud indicator integrating available annotations. |
+
+These annotations allow the dataset to support multiple research scenarios, including:
+
+* Supervised fraud classification.
+* Semi-supervised learning.
+* Unsupervised anomaly detection.
+* Clustering and behavioral analysis.
+* Graph-based fraud detection experiments.
+
+---
+
+## Dataset Access
+
+The complete dataset files are available through the official Zenodo archive:
+
+https://zenodo.org/uploads/17428642
+
+Researchers are encouraged to cite the associated publication when using this dataset.
+
+---
+
+## Data Organization
+
+After downloading the Zenodo archive, the expected structure is:
+
+```
+data/
+│
+├── bitcoin_fraud.db
+│
+└── bitcoin_processed_43features.csv
+```
+
+The relational database represents the original structured storage format, while the CSV file provides a simplified representation for machine learning experiments.
+
+---
+
+## Reproducibility
+
+All experiments reported in the associated research work are based on the released dataset and follow reproducible preprocessing and evaluation protocols.
+
+The separation between:
+
+* raw relational storage,
+* engineered features,
+* and fraud annotations
+
+allows researchers to independently verify the data preparation process and develop alternative fraud detection approaches.
 
