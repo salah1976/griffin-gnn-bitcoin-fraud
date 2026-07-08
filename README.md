@@ -68,7 +68,7 @@ It is publicly available from Zenodo:
 
 **DOI**
 
-*(DOI will be added upon publication.)*
+ https://zenodo.org/uploads/17428642
 
 ---
 
