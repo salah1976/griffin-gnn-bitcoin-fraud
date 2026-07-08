@@ -1,1 +1,28 @@
+# Figures
 
+This directory contains the figures generated during the experimental evaluation of **GriffinGNN**.
+
+## Figures included in the paper
+
+The following figures are presented in **Section 5.5 (Explainability)** of the accompanying paper:
+
+| Figure | Description |
+|---------|-------------|
+| `griffin_shap_beeswarm.pdf` | SHAP beeswarm plot illustrating the contribution of individual features to the model predictions. |
+| `griffin_umap_embeddings.pdf` | UMAP visualization of the learned graph embeddings, showing the latent representation produced by GriffinGNN. |
+
+## Additional figures
+
+The remaining figures were generated during the experimental analysis and are provided for completeness and reproducibility.
+
+| Figure | Description |
+|---------|-------------|
+| `griffin_pr_curve.pdf` | Precision–Recall curve on the test set. |
+| `griffin_score_distribution.pdf` | Distribution of prediction scores. |
+| `griffin_feature_boxplots.pdf` | Distribution of selected input features. |
+| `griffin_shap_bar.pdf` | Global SHAP feature importance ranking. |
+| `griffin_shap_by_category.pdf` | SHAP feature importance aggregated by category. |
+
+## Notes
+
+The additional figures are not discussed in the paper but are included to facilitate reproducibility and further analysis.
