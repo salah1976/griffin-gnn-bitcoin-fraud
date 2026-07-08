@@ -1,5 +1,5 @@
 """
-GriffinGNN — Explicabilité (section 7 de l'article)
+GriffinGNN — Explicabilité (section 5.5 de l'article)
 UMAP des embeddings, distribution des scores, boxplots, SHAP.
 À exécuter dans le même runtime que train_griffin_gnn.py
 (model, data, feature_cols, X_tx_raw, X_tx_scaled, test_idx doivent être en mémoire).
